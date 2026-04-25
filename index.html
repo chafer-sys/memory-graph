@@ -22,8 +22,6 @@ canvas { display:block; }
 #head h1 { color:rgba(255,255,255,.55); font-size:14px; font-weight:300; letter-spacing:4px; }
 #head p  { color:rgba(0,200,170,.35); font-size:9px; letter-spacing:3px; margin-top:4px; }
 
-#hint { position:fixed; bottom:22px; right:22px; color:rgba(255,255,255,.18); font-size:10px; text-align:right; line-height:2.3; pointer-events:none; }
-
 #reset-btn {
   position:fixed; bottom:22px; right:22px; z-index:30;
   padding:6px 14px;
@@ -78,14 +76,14 @@ import { OutputPass }                 from 'three/addons/postprocessing/OutputPa
 ══════════════════════════════════════════════ */
 
 const COL = {
-  core:    '#33ccbe',   // CTX（脳）
-  input:   '#cc6688',   // ユーザー
-  file:    '#33aa94',   // CLAUDE.md ×2
-  memory:  '#c3a060',   // 三兄弟（長期記憶・アンバー）
-  automem: '#cc7755',   // MEMORY.md（Anthropic管理）
+  core:    '#7daba7',   // CTX（脳）
+  input:   '#9c7e88',   // ユーザー
+  file:    '#6c8f89',   // CLAUDE.md ×2
+  memory:  '#ada28f',   // 三兄弟（長期記憶・アンバー）
+  automem: '#9f867c',   // MEMORY.md（Anthropic管理）
   notion:  '#bbbbbb',   // Notion 日報 / 記憶管理DB（白系）
-  trigger: '#5599cc',   // session-start.ps1 / sync-memory.ps1
-  skill:   '#7080cc',   // weekly-memory-update
+  trigger: '#7b8f9f',   // session-start.ps1 / sync-memory.ps1
+  skill:   '#7e839a',   // weekly-memory-update
 };
 const TYPE = {
   core:    'CORE',
@@ -168,12 +166,12 @@ const nodeMap = Object.fromEntries(NODES.map(n => [n.id, n]));
 /* 横長レイアウトの設計位置（左→右の情報フロー順） */
 const BASE = {
   USER: [-350,   0,   0],
-  CG:   [-220,  68,   0],  CP:  [-220, -55,   0],
-  DEC:  [-100,  72,   0],  STA: [-100,   0,   0],  SKI: [-100, -72,   0],
-  MEM:  [  -5,  -92,   0],
+  CG:   [-220,  85,   0],  CP:  [-220, -65,   0],
+  DEC:  [-100,  90,   0],  STA: [-100,   0,   0],  SKI: [-100, -85,   0],
+  MEM:  [  -5, -110,   0],
   CTX:  [  50,   0,   0],
-  SS:   [ 160,  60,   0],  SYNC:[ 160, -58,   0],
-  ND:   [ 270,  44,   0],  WU:  [ 270, -70,   0],
+  SS:   [ 160,  75,   0],  SYNC:[ 160, -70,   0],
+  ND:   [ 270,  55,   0],  WU:  [ 270, -85,   0],
   NDB:  [ 360,   0,   0],
 };
 
@@ -221,13 +219,8 @@ function forceTick(alpha) {
     if (!B.pinned) { B.vx -= fx; B.vy -= fy; B.vz -= fz; }
   });
   // X軸アンカー（横の広がりを保持、弱め）
-  // Z軸引き戻し（パース軽減のためノードをz=0付近に保つ）
   NODES.forEach(n => {
-    if (!n.pinned) {
-      n.vx += (n.baseX - n.x) * 0.006;
-      n.vy += (n.baseY - n.y) * 0.006;
-      n.vz -= n.z * 0.04;
-    }
+    if (!n.pinned) n.vx += (n.baseX - n.x) * 0.006;
   });
   // 位置更新
   NODES.forEach(n => {
@@ -268,7 +261,7 @@ scene.background = new THREE.Color(0x060e14);
 scene.fog = new THREE.FogExp2(0x060e14, 0.0007);
 
 const camera = new THREE.PerspectiveCamera(16, innerWidth/innerHeight, 0.1, 3000);
-camera.position.set(0, 10, 760);
+camera.position.set(0, 10, 810);
 
 const controls = new OrbitControls(camera, canvas);
 controls.enableDamping   = true;
@@ -346,10 +339,10 @@ NODES.forEach(n => {
 ══════════════════════════════════════════════ */
 
 function eColor(f) {
-  if (f >= 20) return new THREE.Color(0x33ccbe);
-  if (f >=  5) return new THREE.Color(0x33aa94);
-  if (f >=  1) return new THREE.Color(0x336e65);
-  return             new THREE.Color(0x336688);
+  if (f >= 20) return new THREE.Color(0x7daba7);
+  if (f >=  5) return new THREE.Color(0x6c8f89);
+  if (f >=  1) return new THREE.Color(0x4f615e);
+  return             new THREE.Color(0x4f5e69);
 }
 function eOpacity(f) { return f>=20 ? 0.70 : f>=5 ? 0.42 : f>=1 ? 0.28 : 0.30; }
 
@@ -475,7 +468,7 @@ document.getElementById('reset-btn').addEventListener('click', () => {
   });
   dragNode = null;
   tip.style.display = 'none';
-  camera.position.set(0, 10, 760);
+  camera.position.set(0, 10, 810);
   controls.target.set(0, 0, 0);
   controls.update();
 });
