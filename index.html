@@ -1,0 +1,490 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>Claude 記憶システム</title>
+<script type="importmap">
+{
+  "imports": {
+    "three":         "https://unpkg.com/three@0.165.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.165.0/examples/jsm/"
+  }
+}
+</script>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+html, body { width:100%; height:100%; }
+body { background:#060e14; overflow:hidden; font-family:'Segoe UI','Hiragino Sans',sans-serif; }
+canvas { display:block; width:100%; height:100%; }
+
+.lbl { font-size:11px; pointer-events:none; user-select:none; white-space:nowrap; }
+
+#tip {
+  position:fixed; display:none; pointer-events:none; z-index:20;
+  width:240px; padding:12px 14px;
+  background:rgba(0,8,20,.93);
+  border:1px solid rgba(0,200,170,.2);
+  border-radius:9px;
+}
+#tip-cat  { font-size:9px; letter-spacing:1.5px; margin-bottom:4px; }
+#tip-name { color:#a8ede4; font-size:13px; margin-bottom:7px; }
+#tip-desc { color:rgba(255,255,255,.5); font-size:11px; line-height:1.8; }
+</style>
+</head>
+<body>
+
+<canvas id="c"></canvas>
+<div id="tip">
+  <div id="tip-cat"></div>
+  <div id="tip-name"></div>
+  <div id="tip-desc"></div>
+</div>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls }              from 'three/addons/controls/OrbitControls.js';
+import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
+import { EffectComposer }             from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass }                 from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass }            from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass }                 from 'three/addons/postprocessing/OutputPass.js';
+
+/* ══════════════════════════════════════════════
+   DATA  ── マーメイド俯瞰図に完全準拠
+══════════════════════════════════════════════ */
+
+const COL = {
+  core:    '#33ccbe',   // CTX（脳）
+  input:   '#cc6688',   // ユーザー
+  file:    '#33aa94',   // CLAUDE.md ×2
+  memory:  '#c3a060',   // 三兄弟（長期記憶・アンバー）
+  automem: '#cc7755',   // MEMORY.md（Anthropic管理）
+  notion:  '#bbbbbb',   // Notion 日報 / 記憶管理DB（白系）
+  trigger: '#5599cc',   // session-start.ps1 / sync-memory.ps1
+  skill:   '#7080cc',   // weekly-memory-update
+};
+const TYPE = {
+  core:    'CORE',
+  input:   'INPUT',
+  file:    'CLAUDE.md',
+  memory:  '三兄弟（長期記憶）',
+  automem: 'AUTO MEMORY',
+  notion:  'NOTION',
+  trigger: 'HOOK / SCRIPT',
+  skill:   'SKILL',
+};
+
+const NODES = [
+  // ── 中核 ──
+  { id:'CTX',  name:'コンテキスト',          g:'core',    r:18, desc:'全情報が集まる場所。ここに届いて初めて記憶が機能する。' },
+  // ── 入力 ──
+  { id:'USER', name:'ユーザー',               g:'input',   r:12, desc:'すべての起点。会話・指示・質問。手動でCLAUDE.mdも編集する。' },
+  // ── CLAUDE.md ──
+  { id:'CG',   name:'CLAUDE.md (Global)',     g:'file',    r:16, desc:'グローバル設定。Claudeの行動ルール・性格を全チャット共通で定義。@importで三兄弟を読む。' },
+  { id:'CP',   name:'CLAUDE.md (Project)',    g:'file',    r: 7, desc:'プロジェクト固有設定。D:\\claude-work専用。ユーザーが手動編集。' },
+  // ── 三兄弟（長期記憶） ──
+  { id:'DEC',  name:'decisions.md',           g:'memory',  r: 9, desc:'技術的決定事項・失敗から学んだルール。CG経由で毎回CTXに届く。' },
+  { id:'STA',  name:'project_status.md',      g:'memory',  r: 9, desc:'プロジェクト状況・未完了タスク。CG経由で毎回CTXに届く。' },
+  { id:'SKI',  name:'skills_info.md',         g:'memory',  r: 9, desc:'スキル管理・Notion DB情報。CG経由で毎回CTXに届く。' },
+  // ── Auto Memory ──
+  { id:'MEM',  name:'MEMORY.md',              g:'automem', r: 6, desc:'Anthropicが自動管理。CTXへの書き込みタイミングは非公開仕様。手動編集不可。' },
+  // ── Notion ──
+  { id:'ND',   name:'Notion 日報',            g:'notion',  r:10, desc:'毎セッション読まれ毎晩書かれる。短期記憶の中継地。' },
+  { id:'NDB',  name:'Notion 記憶管理DB',      g:'notion',  r: 6, desc:'Claude記憶管理DB。sync-memory.psがファイルを差分同期する先。' },
+  // ── スクリプト / フック ──
+  { id:'SS',   name:'session-start.ps1',      g:'trigger', r:10, desc:'セッション開始フック。日報取得（短期記憶注入）とsync-memory起動を担当。' },
+  { id:'SYNC', name:'sync-memory.ps1',        g:'trigger', r: 8, desc:'バックグラウンドで起動。CLAUDE.md・三兄弟の差分をNotionに同期。' },
+  // ── スキル ──
+  { id:'WU',   name:'weekly-memory-update',   g:'skill',   r: 7, desc:'日曜22時・自動実行。日報を参照して三兄弟に重要事項を昇格させる。' },
+];
+
+const LINKS = [
+  // CG → 三兄弟（@import）
+  { s:'CG',  t:'DEC', f:15 },
+  { s:'CG',  t:'STA', f:15 },
+  { s:'CG',  t:'SKI', f:15 },
+  // → CTX（長期記憶として毎回届く）
+  { s:'CG',  t:'CTX', f:20 },
+  { s:'DEC', t:'CTX', f:20 },
+  { s:'STA', t:'CTX', f:20 },
+  { s:'SKI', t:'CTX', f:20 },
+  { s:'CP',  t:'CTX', f:15 },
+  { s:'MEM', t:'CTX', f:5  },
+  // セッション開始フロー
+  { s:'ND',  t:'SS',  f:10 },
+  { s:'SS',  t:'CTX', f:50 },   // 短期記憶注入（最高頻度）
+  { s:'SS',  t:'SYNC',f:10 },
+  // 差分同期フロー
+  { s:'CG',  t:'SYNC',f:5  },
+  { s:'CP',  t:'SYNC',f:5  },
+  { s:'DEC', t:'SYNC',f:5  },
+  { s:'STA', t:'SYNC',f:5  },
+  { s:'SKI', t:'SYNC',f:5  },
+  { s:'SYNC',t:'NDB', f:5  },
+  // CTX からの書き出し
+  { s:'CTX', t:'MEM', f:5  },   // Anthropic Auto Memory
+  { s:'CTX', t:'ND',  f:5  },   // おやすみ → daily-report
+  // weekly-memory-update
+  { s:'ND',  t:'WU',  f:0.14 },
+  { s:'WU',  t:'DEC', f:0.14 },
+  { s:'WU',  t:'STA', f:0.14 },
+  { s:'WU',  t:'SKI', f:0.14 },
+  // ユーザーの操作
+  { s:'USER',t:'CTX', f:50  },   // 会話の発言が直接コンテキストに入る
+  { s:'USER',t:'WU',  f:0.5 },
+  { s:'USER',t:'CP',  f:1   },
+];
+
+/* ══════════════════════════════════════════════
+   PHYSICS STATE
+══════════════════════════════════════════════ */
+
+const nodeMap = Object.fromEntries(NODES.map(n => [n.id, n]));
+
+NODES.forEach(n => {
+  n.x  = (Math.random() - 0.5) * 300;
+  n.y  = (Math.random() - 0.5) * 300;
+  n.z  = (Math.random() - 0.5) * 300;
+  n.vx = 0; n.vy = 0; n.vz = 0;
+  n.pinned    = false;
+  n.pinTarget = new THREE.Vector3();
+});
+
+function forceTick(alpha) {
+  // 反発：全ノード間
+  for (let i = 0; i < NODES.length; i++) {
+    for (let j = i + 1; j < NODES.length; j++) {
+      const A = NODES[i], B = NODES[j];
+      const dx = B.x - A.x, dy = B.y - A.y, dz = B.z - A.z;
+      const d2 = dx*dx + dy*dy + dz*dz + 1;
+      const d  = Math.sqrt(d2);
+      const f  = alpha * 8000 / d2;
+      if (!A.pinned) { A.vx -= dx/d*f; A.vy -= dy/d*f; A.vz -= dz/d*f; }
+      if (!B.pinned) { B.vx += dx/d*f; B.vy += dy/d*f; B.vz += dz/d*f; }
+    }
+  }
+  // バネ：エッジ
+  LINKS.forEach(l => {
+    const A = nodeMap[l.s], B = nodeMap[l.t];
+    if (!A || !B) return;
+    const dx = B.x - A.x, dy = B.y - A.y, dz = B.z - A.z;
+    const d  = Math.sqrt(dx*dx + dy*dy + dz*dz) || 1;
+    const f  = alpha * (d - 110) * 0.14;
+    const fx = dx/d*f, fy = dy/d*f, fz = dz/d*f;
+    if (!A.pinned) { A.vx += fx; A.vy += fy; A.vz += fz; }
+    if (!B.pinned) { B.vx -= fx; B.vy -= fy; B.vz -= fz; }
+  });
+  // 位置更新
+  NODES.forEach(n => {
+    if (n.pinned) {
+      n.x = n.pinTarget.x; n.y = n.pinTarget.y; n.z = n.pinTarget.z;
+      n.vx = 0; n.vy = 0; n.vz = 0;
+    } else {
+      n.x += n.vx; n.y += n.vy; n.z += n.vz;
+      n.vx *= 0.84; n.vy *= 0.84; n.vz *= 0.84;
+    }
+  });
+}
+
+// 初期レイアウト収束
+for (let i = 0; i < 200; i++) forceTick(0.3 * Math.pow(0.985, i));
+
+// 横長ヘッダー向けにZ軸を圧縮（グラフを平面的に広げる）
+NODES.forEach(n => { n.z *= 0.45; });
+
+/* ══════════════════════════════════════════════
+   THREE.JS セットアップ
+══════════════════════════════════════════════ */
+
+const canvas = document.getElementById('c');
+
+const renderer = new THREE.WebGLRenderer({ canvas, antialias:true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+
+const labelRenderer = new CSS2DRenderer();
+labelRenderer.setSize(innerWidth, innerHeight);
+labelRenderer.domElement.style.cssText = 'position:absolute;top:0;left:0;pointer-events:none;z-index:5;';
+document.body.appendChild(labelRenderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x060e14);
+scene.fog = new THREE.FogExp2(0x060e14, 0.0007);
+
+const camera = new THREE.PerspectiveCamera(72, innerWidth/innerHeight, 0.1, 3000);
+camera.position.set(0, 80, 460);
+
+const controls = new OrbitControls(camera, canvas);
+controls.enableDamping   = true;
+controls.dampingFactor   = 0.06;
+controls.autoRotate      = true;
+controls.autoRotateSpeed = 0.4;
+controls.minDistance     = 150;
+controls.maxDistance     = 1000;
+
+const composer = new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene, camera));
+composer.addPass(new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.6, 0.3, 0.15));
+composer.addPass(new OutputPass());
+
+/* ══════════════════════════════════════════════
+   星
+══════════════════════════════════════════════ */
+{
+  const N = 3000, P = new Float32Array(N * 3);
+  for (let i = 0; i < N; i++) {
+    P[i*3]   = (Math.random() - 0.5) * 2000;
+    P[i*3+1] = (Math.random() - 0.5) * 2000;
+    P[i*3+2] = (Math.random() - 0.5) * 2000;
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(P, 3));
+  scene.add(new THREE.Points(geo, new THREE.PointsMaterial({ color:0x1a2a38, size:1.0 })));
+}
+
+/* ══════════════════════════════════════════════
+   ノードメッシュ
+══════════════════════════════════════════════ */
+
+function nodeR(n) { return n.r || 5; }
+
+const meshOf = {};
+
+NODES.forEach(n => {
+  const col = new THREE.Color(COL[n.g]);
+  const r   = nodeR(n);
+
+  const mesh = new THREE.Mesh(
+    new THREE.SphereGeometry(r, 20, 20),
+    new THREE.MeshBasicMaterial({ color: col })
+  );
+  mesh.position.set(n.x, n.y, n.z);
+  mesh.userData.id = n.id;
+  scene.add(mesh);
+  meshOf[n.id] = mesh;
+  n.mesh = mesh;
+
+  // ハロー
+  const halo = new THREE.Mesh(
+    new THREE.SphereGeometry(r * 2.4, 10, 10),
+    new THREE.MeshBasicMaterial({
+      color:col, transparent:true, opacity:0.012,
+      depthWrite:false, blending:THREE.AdditiveBlending,
+    })
+  );
+  halo.raycast = () => {};
+  mesh.add(halo);
+
+  // ラベル（CSS2D = Bloomなし）
+  const div = document.createElement('div');
+  div.className   = 'lbl';
+  div.textContent = n.name;
+  div.style.color = COL[n.g];
+  const lbl = new CSS2DObject(div);
+  lbl.position.set(0, r + 7, 0);
+  mesh.add(lbl);
+});
+
+/* ══════════════════════════════════════════════
+   エッジ
+══════════════════════════════════════════════ */
+
+function eColor(f) {
+  if (f >= 20) return new THREE.Color(0x33ccbe);
+  if (f >=  5) return new THREE.Color(0x33aa94);
+  if (f >=  1) return new THREE.Color(0x336e65);
+  return             new THREE.Color(0x336688);
+}
+function eOpacity(f) { return f>=20 ? 0.70 : f>=5 ? 0.42 : f>=1 ? 0.28 : 0.30; }
+
+const CURVE_PTS = 26;
+const edges = LINKS.map(l => {
+  const geo  = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(CURVE_PTS * 3), 3));
+  const line = new THREE.Line(geo, new THREE.LineBasicMaterial({
+    color: eColor(l.f), transparent:true, opacity: eOpacity(l.f),
+    blending:THREE.AdditiveBlending, depthWrite:false,
+  }));
+  scene.add(line);
+  return { l, geo, mid: new THREE.Vector3() };
+});
+
+/* ══════════════════════════════════════════════
+   パーティクル
+══════════════════════════════════════════════ */
+
+function pCount(f) { return f>=20 ? 6 : f>=5 ? 3 : f>=1 ? 2 : 1; }
+function pSpeed(f) { return 0.002 + 0.009 * Math.log(f + 1) / Math.log(51); }
+
+const pGeo  = new THREE.SphereGeometry(1.1, 6, 6);
+const parts = [];
+edges.forEach((e, ei) => {
+  const cnt = pCount(e.l.f);
+  const col = eColor(e.l.f);
+  for (let i = 0; i < cnt; i++) {
+    const m = new THREE.Mesh(pGeo, new THREE.MeshBasicMaterial({
+      color:col, transparent:true, blending:THREE.AdditiveBlending, depthWrite:false,
+    }));
+    scene.add(m);
+    parts.push({ m, ei, t: i / cnt, spd: pSpeed(e.l.f) * (0.8 + Math.random() * 0.4) });
+  }
+});
+
+/* ══════════════════════════════════════════════
+   インタラクション
+══════════════════════════════════════════════ */
+
+const raycaster  = new THREE.Raycaster();
+const pointer    = new THREE.Vector2();
+const dragPlane  = new THREE.Plane();
+const hitTargets = Object.values(meshOf);
+const tip        = document.getElementById('tip');
+
+let dragNode  = null;
+let hoverNode = null;
+
+function updatePointer(ev) {
+  pointer.x =  (ev.clientX / innerWidth ) * 2 - 1;
+  pointer.y = -(ev.clientY / innerHeight) * 2 + 1;
+}
+
+canvas.addEventListener('pointermove', ev => {
+  updatePointer(ev);
+
+  if (dragNode) {
+    raycaster.setFromCamera(pointer, camera);
+    const hit = new THREE.Vector3();
+    raycaster.ray.intersectPlane(dragPlane, hit);
+    if (hit) dragNode.pinTarget.copy(hit);
+    return;
+  }
+
+  raycaster.setFromCamera(pointer, camera);
+  const hits = raycaster.intersectObjects(hitTargets, false);
+
+  if (hits.length) {
+    const n = nodeMap[hits[0].object.userData.id];
+    hoverNode = n;
+    canvas.style.cursor = 'grab';
+    document.getElementById('tip-cat').textContent  = TYPE[n.g];
+    document.getElementById('tip-cat').style.color  = COL[n.g];
+    document.getElementById('tip-name').textContent = n.name;
+    document.getElementById('tip-desc').textContent = n.desc;
+    let x = ev.clientX + 16, y = ev.clientY - 8;
+    if (x + 260 > innerWidth)  x = ev.clientX - 260;
+    if (y + 150 > innerHeight) y = ev.clientY - 150;
+    tip.style.cssText = `display:block;left:${x}px;top:${y}px;`;
+  } else {
+    hoverNode = null;
+    canvas.style.cursor = 'default';
+    tip.style.display   = 'none';
+  }
+});
+
+canvas.addEventListener('pointerdown', ev => {
+  if (ev.button !== 0 || !hoverNode) return;
+  dragNode = hoverNode;
+  dragNode.pinned = true;
+  dragNode.pinTarget.copy(dragNode.mesh.position);
+  dragPlane.setFromNormalAndCoplanarPoint(
+    camera.position.clone().sub(dragNode.mesh.position).normalize(),
+    dragNode.mesh.position
+  );
+  controls.enabled    = false;
+  canvas.style.cursor = 'grabbing';
+  tip.style.display   = 'none';
+});
+
+canvas.addEventListener('pointerup', () => {
+  if (!dragNode) return;
+  dragNode.pinned  = false;
+  dragNode         = null;
+  controls.enabled = true;
+  canvas.style.cursor = hoverNode ? 'grab' : 'default';
+});
+
+canvas.addEventListener('pointerleave', () => {
+  if (dragNode) { dragNode.pinned = false; dragNode = null; }
+  hoverNode        = null;
+  controls.enabled = true;
+  tip.style.display   = 'none';
+  canvas.style.cursor = 'default';
+});
+
+/* ══════════════════════════════════════════════
+   リサイズ
+══════════════════════════════════════════════ */
+
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+  composer.setSize(innerWidth, innerHeight);
+  labelRenderer.setSize(innerWidth, innerHeight);
+});
+
+/* ══════════════════════════════════════════════
+   アニメーションループ
+══════════════════════════════════════════════ */
+
+const _A = new THREE.Vector3();
+const _B = new THREE.Vector3();
+const _M = new THREE.Vector3();
+
+function animate() {
+  requestAnimationFrame(animate);
+
+  // 毎フレーム物理更新
+  // 通常alpha=0.04 → 緩やかにゆれる
+  // ドラッグ時alpha=0.18 → 引っ張りが全体に伝播
+  forceTick(dragNode ? 0.18 : 0.04);
+
+  // メッシュを物理位置に同期
+  NODES.forEach(n => n.mesh.position.set(n.x, n.y, n.z));
+
+  // エッジ曲線
+  edges.forEach(e => {
+    _A.copy(meshOf[e.l.s].position);
+    _B.copy(meshOf[e.l.t].position);
+    const d = _A.distanceTo(_B);
+    _M.addVectors(_A, _B).multiplyScalar(0.5);
+    const mLen = _M.length();
+    if (mLen > 4) _M.normalize().multiplyScalar(mLen + d * 0.18);
+    else          _M.set(0, d * 0.25, 0);
+    e.mid.copy(_M);
+
+    const p = e.geo.attributes.position.array;
+    for (let i = 0; i < CURVE_PTS; i++) {
+      const t = i / (CURVE_PTS - 1), mt = 1 - t;
+      p[i*3]   = mt*mt*_A.x + 2*mt*t*_M.x + t*t*_B.x;
+      p[i*3+1] = mt*mt*_A.y + 2*mt*t*_M.y + t*t*_B.y;
+      p[i*3+2] = mt*mt*_A.z + 2*mt*t*_M.z + t*t*_B.z;
+    }
+    e.geo.attributes.position.needsUpdate = true;
+  });
+
+  // パーティクル
+  parts.forEach(p => {
+    p.t = (p.t + p.spd) % 1;
+    const e = edges[p.ei];
+    _A.copy(meshOf[e.l.s].position);
+    _B.copy(meshOf[e.l.t].position);
+    const t = p.t, mt = 1 - t;
+    p.m.position.set(
+      mt*mt*_A.x + 2*mt*t*e.mid.x + t*t*_B.x,
+      mt*mt*_A.y + 2*mt*t*e.mid.y + t*t*_B.y,
+      mt*mt*_A.z + 2*mt*t*e.mid.z + t*t*_B.z,
+    );
+    p.m.material.opacity = Math.sin(p.t * Math.PI) * 0.9;
+  });
+
+  controls.update();
+  composer.render();
+  labelRenderer.render(scene, camera);
+}
+
+animate();
+</script>
+</body>
+</html>
