@@ -24,6 +24,19 @@ canvas { display:block; }
 
 #hint { position:fixed; bottom:22px; right:22px; color:rgba(255,255,255,.18); font-size:10px; text-align:right; line-height:2.3; pointer-events:none; }
 
+#reset-btn {
+  position:fixed; bottom:22px; right:22px; z-index:30;
+  padding:6px 14px;
+  background:rgba(0,200,170,.08);
+  border:1px solid rgba(0,200,170,.25);
+  border-radius:6px;
+  color:rgba(0,200,170,.6);
+  font-size:10px; letter-spacing:1.5px;
+  cursor:pointer;
+  transition:background .2s, color .2s;
+}
+#reset-btn:hover { background:rgba(0,200,170,.18); color:rgba(0,220,190,.9); }
+
 #tip {
   position:fixed; display:none; pointer-events:none; z-index:20;
   width:240px; padding:12px 14px;
@@ -44,11 +57,7 @@ canvas { display:block; }
   <h1>Claude 記憶システム</h1>
   <p>MEMORY ARCHITECTURE</p>
 </div>
-<div id="hint">
-  ノードをドラッグ：引っ張る<br>
-  背景をドラッグ：回転<br>
-  スクロール：ズーム
-</div>
+<button id="reset-btn">RESET</button>
 <div id="tip">
   <div id="tip-cat"></div>
   <div id="tip-name"></div>
@@ -159,12 +168,12 @@ const nodeMap = Object.fromEntries(NODES.map(n => [n.id, n]));
 /* 横長レイアウトの設計位置（左→右の情報フロー順） */
 const BASE = {
   USER: [-350,   0,   0],
-  CG:   [-220,  85,   0],  CP:  [-220, -65,   0],
-  DEC:  [-100,  90,   0],  STA: [-100,   0,   0],  SKI: [-100, -85,   0],
-  MEM:  [  -5, -110,   0],
+  CG:   [-220,  68,   0],  CP:  [-220, -55,   0],
+  DEC:  [-100,  72,   0],  STA: [-100,   0,   0],  SKI: [-100, -72,   0],
+  MEM:  [  -5,  -92,   0],
   CTX:  [  50,   0,   0],
-  SS:   [ 160,  75,   0],  SYNC:[ 160, -70,   0],
-  ND:   [ 270,  55,   0],  WU:  [ 270, -85,   0],
+  SS:   [ 160,  60,   0],  SYNC:[ 160, -58,   0],
+  ND:   [ 270,  44,   0],  WU:  [ 270, -70,   0],
   NDB:  [ 360,   0,   0],
 };
 
@@ -212,8 +221,13 @@ function forceTick(alpha) {
     if (!B.pinned) { B.vx -= fx; B.vy -= fy; B.vz -= fz; }
   });
   // X軸アンカー（横の広がりを保持、弱め）
+  // Z軸引き戻し（パース軽減のためノードをz=0付近に保つ）
   NODES.forEach(n => {
-    if (!n.pinned) n.vx += (n.baseX - n.x) * 0.006;
+    if (!n.pinned) {
+      n.vx += (n.baseX - n.x) * 0.006;
+      n.vy += (n.baseY - n.y) * 0.006;
+      n.vz -= n.z * 0.04;
+    }
   });
   // 位置更新
   NODES.forEach(n => {
@@ -229,6 +243,9 @@ function forceTick(alpha) {
 
 // 初期収束
 for (let i = 0; i < 200; i++) forceTick(0.3 * Math.pow(0.985, i));
+
+// 収束後の位置を保存（リセット用）
+NODES.forEach(n => { n.initX = n.x; n.initY = n.y; n.initZ = n.z; });
 
 /* ══════════════════════════════════════════════
    THREE.JS セットアップ
@@ -250,8 +267,8 @@ const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x060e14);
 scene.fog = new THREE.FogExp2(0x060e14, 0.0007);
 
-const camera = new THREE.PerspectiveCamera(55, innerWidth/innerHeight, 0.1, 3000);
-camera.position.set(0, 20, 220);
+const camera = new THREE.PerspectiveCamera(16, innerWidth/innerHeight, 0.1, 3000);
+camera.position.set(0, 10, 760);
 
 const controls = new OrbitControls(camera, canvas);
 controls.enableDamping   = true;
@@ -448,6 +465,19 @@ canvas.addEventListener('pointerleave', () => {
   controls.enabled = true;
   tip.style.display   = 'none';
   canvas.style.cursor = 'default';
+});
+
+document.getElementById('reset-btn').addEventListener('click', () => {
+  NODES.forEach(n => {
+    n.x = n.initX; n.y = n.initY; n.z = n.initZ;
+    n.vx = 0; n.vy = 0; n.vz = 0;
+    n.pinned = false;
+  });
+  dragNode = null;
+  tip.style.display = 'none';
+  camera.position.set(0, 10, 760);
+  controls.target.set(0, 0, 0);
+  controls.update();
 });
 
 /* ══════════════════════════════════════════════
